@@ -61,7 +61,7 @@ def do_research(
             "research_depth": research_depth,
             "sources_used": len(search_data["sources"]),
             "time_taken": round(end_time - start_time, 2),
-            "llm_model": "Llama-3.3-70B",
+            "llm_model": "openai/gpt-oss-20b",
             "confidence": "High"
         }
 
