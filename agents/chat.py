@@ -2,9 +2,14 @@ from services.groq_service import get_llm
 from prompts.chat_prompt import CHAT_PROMPT
 
 
-def follow_up_chat(query: str, research: dict, final: dict, question: str):
+def follow_up_chat(
+    query: str,
+    research: dict,
+    final: dict,
+    question: str
+):
     """
-    Answer follow-up questions based on the generated research report.
+    Answer follow-up questions using the completed research report.
     """
 
     llm = get_llm()
@@ -27,6 +32,7 @@ def follow_up_chat(query: str, research: dict, final: dict, question: str):
         }
 
     except Exception as e:
+
         return {
             "error": "Follow-up chat failed",
             "details": str(e)

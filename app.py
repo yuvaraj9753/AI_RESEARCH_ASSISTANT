@@ -1,9 +1,19 @@
+import uuid
+
 import streamlit as st
 
-from agents.researcher import do_research
-from agents.summarizer import summarize
-from agents.chat import follow_up_chat
+from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
+from agents.chat import follow_up_chat
+from graph.research_graph import research_graph
+
+from utils.pdf_export import create_research_pdf
+
+
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 
 st.set_page_config(
     page_title="AI Research Assistant",
@@ -11,34 +21,66 @@ st.set_page_config(
     layout="wide"
 )
 
+
 st.title("🔬 AI Research Assistant")
 
 st.caption(
-    "AI-powered research assistant with web search, source citations, PDF export, and follow-up Q&A."
+    "Agentic AI research assistant with LangGraph, "
+    "web search, human approval, source citations, "
+    "iterative research, PDF export and follow-up Q&A."
 )
 
-st.markdown("Research → Analyze → Summarize")
+st.markdown(
+    "Research Planning → Human Approval → "
+    "Web Search → Analysis → Evaluation → Report"
+)
 
-# -------------------- Session State --------------------
 
-if "query" not in st.session_state:
-    st.session_state.query = ""
+# =========================================================
+# SESSION STATE
+# =========================================================
 
-if "research" not in st.session_state:
-    st.session_state.research = None
+defaults = {
 
-if "final" not in st.session_state:
-    st.session_state.final = None
+    "query": "",
 
-if "research_type" not in st.session_state:
-    st.session_state.research_type = "General"
+    "research_type": "General",
 
-if "research_depth" not in st.session_state:
-    st.session_state.research_depth = "Standard"
+    "research_depth": "Standard",
 
-# -------------------- Sidebar --------------------
+    "research_plan": None,
+
+    "research": None,
+
+    "final": None,
+
+    "statistics": None,
+
+    "thread_id": None,
+
+    "waiting_for_approval": False,
+
+    "research_running": False,
+
+    "question": "",
+
+    "messages": []
+}
+
+
+for key, value in defaults.items():
+
+    if key not in st.session_state:
+
+        st.session_state[key] = value
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
 
 st.sidebar.header("⚙️ Research Settings")
+
 
 research_type = st.sidebar.selectbox(
     "Research Type",
@@ -53,8 +95,11 @@ research_type = st.sidebar.selectbox(
         "Technical",
         "Academic",
         "Market"
-    ].index(st.session_state.research_type)
+    ].index(
+        st.session_state.research_type
+    )
 )
+
 
 research_depth = st.sidebar.radio(
     "Research Depth",
@@ -67,74 +112,422 @@ research_depth = st.sidebar.radio(
         "Quick",
         "Standard",
         "Deep"
-    ].index(st.session_state.research_depth)
+    ].index(
+        st.session_state.research_depth
+    )
 )
 
-# -------------------- User Input --------------------
+
+# =========================================================
+# USER QUERY
+# =========================================================
 
 query = st.text_input(
     "🔎 Enter your research topic",
     value=st.session_state.query
 )
 
-# -------------------- Run Research --------------------
 
-if st.button("🚀 Run Research"):
+# =========================================================
+# RUN RESEARCH
+# =========================================================
 
-    if query.strip() == "":
-        st.warning("Please enter a research topic.")
-        st.stop()
+if st.button(
+    "🚀 Start Research",
+    type="primary"
+):
 
-    with st.spinner("🔍 Researching..."):
+    if not query.strip():
 
-        research = do_research(
-            query=query,
-            research_type=research_type,
-            research_depth=research_depth
+        st.warning(
+            "Please enter a research topic."
         )
 
-    if "error" in research:
-        st.error(research.get("details", research.get("error")))
         st.stop()
 
-    with st.spinner("🧠 Generating Final Report..."):
-        final = summarize(query, research)
-
-    if "error" in final:
-        st.error(final.get("details", final.get("error")))
-        st.stop()
-
+    # Reset previous research
     st.session_state.query = query
-    st.session_state.research = research
-    st.session_state.final = final
     st.session_state.research_type = research_type
     st.session_state.research_depth = research_depth
 
-# -------------------- Show Report --------------------
+    st.session_state.research = None
+    st.session_state.final = None
+    st.session_state.statistics = None
 
-if st.session_state.final is not None:
+    st.session_state.research_plan = None
 
-    research = st.session_state.research
-    final = st.session_state.final
-    query = st.session_state.query
+    # New LangGraph thread
+    st.session_state.thread_id = str(
+        uuid.uuid4()
+    )
 
-    stats = research.get("statistics", {})
+    st.session_state.research_running = True
+    st.session_state.waiting_for_approval = False
 
-    st.sidebar.header("📊 Research Statistics")
+    initial_state = {
+
+        "query": query,
+
+        "research_type": research_type,
+
+        "research_depth": research_depth,
+
+        "research_iterations": 0,
+
+        "start_time": __import__(
+            "time"
+        ).time(),
+
+        "messages": [
+            HumanMessage(
+                content=query
+            )
+        ]
+    }
+
+    config = {
+        "configurable": {
+            "thread_id": st.session_state.thread_id
+        }
+    }
+
+    with st.spinner(
+        "🧠 Creating research plan..."
+    ):
+
+        result = research_graph.invoke(
+            initial_state,
+            config=config
+        )
+
+    # =====================================================
+    # HUMAN APPROVAL INTERRUPT
+    # =====================================================
+
+    snapshot = research_graph.get_state(
+        config
+    )
+
+    interrupts = snapshot.tasks
+
+    if interrupts:
+
+        interrupt_value = None
+
+        for task in interrupts:
+
+            if getattr(
+                task,
+                "interrupts",
+                None
+            ):
+
+                interrupt_value = (
+                    task.interrupts[0].value
+                )
+
+                break
+
+        if interrupt_value:
+
+            st.session_state.research_plan = (
+                interrupt_value.get(
+                    "plan",
+                    {}
+                )
+            )
+
+            st.session_state.waiting_for_approval = True
+
+            st.session_state.research_running = False
+
+            st.rerun()
+
+
+# =========================================================
+# HUMAN APPROVAL UI
+# =========================================================
+
+if st.session_state.waiting_for_approval:
+
+    st.divider()
+
+    st.header(
+        "👤 Human-in-the-Loop: Review Research Plan"
+    )
+
+    plan = st.session_state.research_plan or {}
+
+    st.subheader("🎯 Research Objective")
+
+    st.write(
+        plan.get(
+            "objective",
+            "No objective generated."
+        )
+    )
+
+    st.subheader("❓ Sub Questions")
+
+    for index, question_item in enumerate(
+        plan.get(
+            "sub_questions",
+            []
+        ),
+        start=1
+    ):
+
+        st.write(
+            f"{index}. {question_item}"
+        )
+
+    st.subheader("🔎 Search Queries")
+
+    for index, search_query in enumerate(
+        plan.get(
+            "search_queries",
+            []
+        ),
+        start=1
+    ):
+
+        st.write(
+            f"{index}. {search_query}"
+        )
+
+    st.subheader("🎯 Focus Areas")
+
+    for focus in plan.get(
+        "focus_areas",
+        []
+    ):
+
+        st.write(
+            f"• {focus}"
+        )
+
+    st.divider()
+
+    feedback = st.text_area(
+        "✏️ Optional feedback / modification",
+        placeholder=(
+            "Example: Add more focus on limitations "
+            "and real-world applications."
+        )
+    )
+
+    col1, col2 = st.columns(2)
+
+    # =====================================================
+    # APPROVE
+    # =====================================================
+
+    with col1:
+
+        if st.button(
+            "✅ Approve & Continue",
+            type="primary"
+        ):
+
+            config = {
+                "configurable": {
+                    "thread_id": (
+                        st.session_state.thread_id
+                    )
+                }
+            }
+
+            with st.spinner(
+                "🔍 Continuing research..."
+            ):
+
+                research_graph.invoke(
+                    Command(
+                        resume={
+                            "approved": True,
+                            "feedback": feedback
+                        }
+                    ),
+                    config=config
+                )
+
+            st.session_state.waiting_for_approval = False
+            st.session_state.research_running = True
+
+            st.rerun()
+
+    # =====================================================
+    # MODIFY
+    # =====================================================
+
+    with col2:
+
+        if st.button(
+            "✏️ Modify & Continue"
+        ):
+
+            if not feedback.strip():
+
+                st.warning(
+                    "Please provide modification feedback."
+                )
+
+                st.stop()
+
+            # Ask the planner again using feedback
+            modified_plan = dict(plan)
+
+            modified_plan["human_feedback"] = feedback
+
+            config = {
+                "configurable": {
+                    "thread_id": (
+                        st.session_state.thread_id
+                    )
+                }
+            }
+
+            with st.spinner(
+                "🔄 Updating research plan..."
+            ):
+
+                research_graph.invoke(
+                    Command(
+                        resume={
+                            "approved": True,
+                            "feedback": feedback,
+                            "plan": modified_plan
+                        }
+                    ),
+                    config=config
+                )
+
+            st.session_state.research_plan = modified_plan
+            st.session_state.waiting_for_approval = False
+            st.session_state.research_running = True
+
+            st.rerun()
+
+
+# =========================================================
+# CHECK GRAPH COMPLETION
+# =========================================================
+
+if st.session_state.research_running:
+
+    config = {
+        "configurable": {
+            "thread_id": (
+                st.session_state.thread_id
+            )
+        }
+    }
+
+    snapshot = research_graph.get_state(
+        config
+    )
+
+    if snapshot.values:
+
+        values = snapshot.values
+
+        if values.get(
+            "final_report"
+        ):
+
+            st.session_state.final = (
+                values.get(
+                    "final_report"
+                )
+            )
+
+            st.session_state.statistics = (
+                values.get(
+                    "statistics",
+                    {}
+                )
+            )
+
+            st.session_state.research = {
+
+                "summary": values.get(
+                    "analysis",
+                    {}
+                ).get(
+                    "summary",
+                    ""
+                ),
+
+                "insights": values.get(
+                    "insights",
+                    []
+                ),
+
+                "citations": values.get(
+                    "sources",
+                    []
+                )
+            }
+
+            st.session_state.research_running = False
+
+            st.success(
+                "✅ Research completed successfully!"
+            )
+
+        elif values.get("error"):
+
+            st.session_state.research_running = False
+
+            st.error(
+                values["error"]
+            )
+
+
+# =========================================================
+# SIDEBAR STATISTICS
+# =========================================================
+
+if st.session_state.statistics:
+
+    stats = st.session_state.statistics
+
+    st.sidebar.divider()
+
+    st.sidebar.header(
+        "📊 Research Statistics"
+    )
 
     st.sidebar.metric(
         "Sources Used",
-        stats.get("sources_used", 0)
+        stats.get(
+            "sources_used",
+            0
+        )
     )
 
     st.sidebar.metric(
         "Research Type",
-        stats.get("research_type", "-")
+        stats.get(
+            "research_type",
+            "-"
+        )
     )
 
     st.sidebar.metric(
         "Research Depth",
-        stats.get("research_depth", "-")
+        stats.get(
+            "research_depth",
+            "-"
+        )
+    )
+
+    st.sidebar.metric(
+        "Iterations",
+        stats.get(
+            "research_iterations",
+            0
+        )
     )
 
     st.sidebar.metric(
@@ -144,74 +537,214 @@ if st.session_state.final is not None:
 
     st.sidebar.metric(
         "LLM",
-        stats.get("llm_model", "-")
+        stats.get(
+            "llm_model",
+            "-"
+        )
     )
 
-    st.sidebar.metric(
-        "Confidence",
-        stats.get("confidence", "High")
+
+# =========================================================
+# REPORT
+# =========================================================
+
+if (
+    st.session_state.final is not None
+    and st.session_state.research is not None
+):
+
+    research = st.session_state.research
+    final = st.session_state.final
+
+    st.divider()
+
+    st.header(
+        "📄 Research Report"
     )
 
-# -------------------- Report --------------------
+    # -----------------------------------------------------
+    # Insights
+    # -----------------------------------------------------
 
-    with st.expander("📊 Insights", expanded=True):
-        for insight in research.get("insights", []):
-            st.write(f"✔️ {insight}")
+    with st.expander(
+        "📊 Insights",
+        expanded=True
+    ):
 
-    with st.expander("🧾 Research Summary"):
-        st.write(research.get("summary", ""))
+        for insight in research.get(
+            "insights",
+            []
+        ):
 
-    with st.expander("📖 Introduction"):
-        st.write(final.get("introduction", ""))
+            st.write(
+                f"✔️ {insight}"
+            )
 
-    with st.expander("🔑 Key Points"):
-        for point in final.get("key_points", []):
-            st.write(f"👉 {point}")
+    # -----------------------------------------------------
+    # Summary
+    # -----------------------------------------------------
 
-    with st.expander("✅ Conclusion"):
-        st.write(final.get("conclusion", ""))
+    with st.expander(
+        "🧾 Research Summary"
+    ):
 
-    # -------------------- Related Topics --------------------
+        st.write(
+            research.get(
+                "summary",
+                ""
+            )
+        )
 
-    with st.expander("🧭 Related Topics"):
+    # -----------------------------------------------------
+    # Introduction
+    # -----------------------------------------------------
 
-        related_topics = final.get("related_topics", [])
+    with st.expander(
+        "📖 Introduction"
+    ):
+
+        st.write(
+            final.get(
+                "introduction",
+                ""
+            )
+        )
+
+    # -----------------------------------------------------
+    # Key Points
+    # -----------------------------------------------------
+
+    with st.expander(
+        "🔑 Key Points"
+    ):
+
+        for point in final.get(
+            "key_points",
+            []
+        ):
+
+            st.write(
+                f"👉 {point}"
+            )
+
+    # -----------------------------------------------------
+    # Conclusion
+    # -----------------------------------------------------
+
+    with st.expander(
+        "✅ Conclusion"
+    ):
+
+        st.write(
+            final.get(
+                "conclusion",
+                ""
+            )
+        )
+
+    # -----------------------------------------------------
+    # Related Topics
+    # -----------------------------------------------------
+
+    with st.expander(
+        "🧭 Related Topics"
+    ):
+
+        related_topics = final.get(
+            "related_topics",
+            []
+        )
 
         if related_topics:
+
             for topic in related_topics:
-                st.write(f"🔹 {topic}")
+
+                st.write(
+                    f"🔹 {topic}"
+                )
+
         else:
-            st.write("No related topics found.")
 
-    # -------------------- Sources --------------------
+            st.write(
+                "No related topics found."
+            )
 
-    with st.expander("🔗 Sources"):
-        for link in final.get("citations", []):
-            st.markdown(f"- {link}")
+    # -----------------------------------------------------
+    # Sources
+    # -----------------------------------------------------
 
-   
+    with st.expander(
+        "🔗 Sources"
+    ):
 
-# -------------------- Follow-up Chat --------------------
+        for link in final.get(
+            "citations",
+            []
+        ):
+
+            st.markdown(
+                f"- {link}"
+            )
+
+    # -----------------------------------------------------
+    # PDF
+    # -----------------------------------------------------
+
+    pdf_file = create_research_pdf(
+        query=st.session_state.query,
+        research=research,
+        final=final
+    )
+
+    st.download_button(
+        label="📥 Download Research PDF",
+        data=pdf_file,
+        file_name="research_report.pdf",
+        mime="application/pdf"
+    )
+
+
+# =========================================================
+# FOLLOW-UP CHAT
+# =========================================================
 
 st.divider()
 
-st.subheader("💬 Follow-up Chat")
-
-question = st.text_input(
-    "Ask a follow-up question"
+st.subheader(
+    "💬 Follow-up Chat"
 )
 
-if st.button("Ask"):
+
+question = st.text_input(
+    "Ask a follow-up question",
+    key="follow_up_question"
+)
+
+
+if st.button(
+    "Ask",
+    key="ask_follow_up"
+):
 
     if st.session_state.final is None:
-        st.warning("⚠️ Please perform research first.")
+
+        st.warning(
+            "⚠️ Please perform research first."
+        )
+
         st.stop()
 
-    if question.strip() == "":
-        st.warning("⚠️ Please enter a question.")
+    if not question.strip():
+
+        st.warning(
+            "⚠️ Please enter a question."
+        )
+
         st.stop()
 
-    with st.spinner("Thinking..."):
+    with st.spinner(
+        "🤔 Thinking..."
+    ):
 
         response = follow_up_chat(
             st.session_state.query,
@@ -221,7 +754,23 @@ if st.button("Ask"):
         )
 
     if "error" in response:
-        st.error(response["details"])
+
+        st.error(
+            response.get(
+                "details",
+                response.get(
+                    "error",
+                    "Unknown error"
+                )
+            )
+        )
+
     else:
-        st.success("Answer")
-        st.write(response["answer"])
+
+        st.success(
+            "Answer"
+        )
+
+        st.write(
+            response["answer"]
+        )

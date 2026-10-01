@@ -9,12 +9,18 @@ Topic:
 Research Insights:
 {insights}
 
+Research Sources:
+{sources}
+
 Instructions:
 
 1. Write a concise introduction.
 2. Extract the most important key points.
 3. Write a meaningful conclusion.
-4. Suggest 5 related research topics that users may want to explore next.
+4. Suggest 5 related research topics.
+5. Keep the report factual.
+6. Do not invent information.
+7. Do not add unsupported claims.
 
 Return ONLY valid JSON.
 

@@ -11,12 +11,14 @@ def do_research(
     research_type: str = "General",
     research_depth: str = "Standard"
 ):
+    """
+    Legacy research function.
+
+    The main application now uses LangGraph.
+    This function is retained for compatibility/reference.
+    """
 
     llm = get_llm()
-
-    # -------------------------
-    # Research Depth
-    # -------------------------
 
     depth_map = {
         "Quick": 3,
@@ -50,10 +52,6 @@ def do_research(
 
         end_time = time.time()
 
-        # -------------------------
-        # Extra Statistics
-        # -------------------------
-
         data["citations"] = search_data["sources"]
 
         data["statistics"] = {
@@ -61,8 +59,7 @@ def do_research(
             "research_depth": research_depth,
             "sources_used": len(search_data["sources"]),
             "time_taken": round(end_time - start_time, 2),
-            "llm_model": "openai/gpt-oss-20b",
-            "confidence": "High"
+            "llm_model": "openai/gpt-oss-20b"
         }
 
         return data

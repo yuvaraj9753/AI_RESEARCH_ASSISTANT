@@ -41,3 +41,7 @@ dist/
 
 # mypy cache
 .mypy_cache/
+
+
+*.pyc
+*.db

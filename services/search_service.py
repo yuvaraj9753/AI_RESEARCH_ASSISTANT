@@ -1,29 +1,33 @@
+import json
 import os
 
 from dotenv import load_dotenv
 from tavily import TavilyClient
+from langchain_core.tools import tool
+
 
 load_dotenv()
 
+
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+
+if not TAVILY_API_KEY:
+    raise ValueError(
+        "TAVILY_API_KEY not found in .env file."
+    )
+
+
 client = TavilyClient(
-    api_key=os.getenv("TAVILY_API_KEY")
+    api_key=TAVILY_API_KEY
 )
 
 
-def search_web(query: str, max_results: int = 5):
+def search_web(
+    query: str,
+    max_results: int = 5
+):
     """
     Search the web using Tavily.
-
-    Parameters
-    ----------
-    query : str
-        User research topic.
-
-    max_results : int
-        Number of web sources to retrieve.
-        Quick    -> 3
-        Standard -> 5
-        Deep     -> 10
     """
 
     try:
@@ -41,15 +45,22 @@ def search_web(query: str, max_results: int = 5):
 
             content = item.get("content", "")
             url = item.get("url", "")
+            title = item.get("title", "")
 
             if content:
-                results.append(content)
+
+                results.append({
+                    "title": title,
+                    "url": url,
+                    "content": content
+                })
 
             if url:
                 sources.append(url)
 
         return {
-            "raw_results": "\n\n".join(results),
+            "query": query,
+            "results": results,
             "sources": sources,
             "total_sources": len(sources)
         }
@@ -57,8 +68,36 @@ def search_web(query: str, max_results: int = 5):
     except Exception as e:
 
         return {
-            "error": str(e),
-            "raw_results": "",
+            "query": query,
+            "results": [],
             "sources": [],
-            "total_sources": 0
+            "total_sources": 0,
+            "error": str(e)
         }
+
+
+@tool
+def web_search(query: str) -> str:
+    """
+    Search the web using Tavily.
+
+    Use this tool when current web information is required
+    for research.
+    """
+
+    data = search_web(
+        query=query,
+        max_results=5
+    )
+
+    if "error" in data:
+
+        return json.dumps({
+            "error": data["error"],
+            "query": query
+        })
+
+    return json.dumps(
+        data,
+        ensure_ascii=False
+    )
